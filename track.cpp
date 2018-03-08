@@ -1,4 +1,5 @@
 #include <iostream>
+#include <algorithm>
 #include <opencv2/opencv.hpp>
 #include <opencv2/features2d.hpp>
 
@@ -6,12 +7,36 @@ using namespace std;
 using namespace cv;
 
 #define FEATURES 128*4
+#define N_BEST_POINTS 8
+#define MAX_POINTS 1024 * 3
 
 class KnownPoints
 {
     Mat descriptors;
     vector<KeyPoint> keypoints;
     vector<string> keypoints_names;
+
+  private:
+    void sort_points_on_response(vector<KeyPoint> & keypoints,
+                                 vector<bool> & matched_idx,
+                                 vector<size_t> & idx)
+    {
+        for (auto i = 0; i < matched_idx.size(); i += 1)
+        {
+            if (matched_idx[i])
+            {
+                /* continue */
+                continue;
+            }
+            idx.push_back(i);
+        }
+
+        auto glambda = [keypoints](int l, int r)
+        {
+            return keypoints[l].response > keypoints[r].response;
+        };
+        sort(idx.begin(), idx.end(), glambda);
+    }
   public:
     KnownPoints()
     {
@@ -26,21 +51,23 @@ class KnownPoints
                     Mat & descriptors,
                     vector<bool> & matched_idx)
     {
-        if (this->keypoints.size() > 1024)
+        if (this->keypoints.size() > MAX_POINTS)
         {
             cout << "no more data" << endl;
             return;
         }
 
-        for (auto i = 0; i < matched_idx.size(); i += 1)
+        vector<size_t> sorted_keypoint_idx;
+        sort_points_on_response(keypoints, matched_idx, sorted_keypoint_idx);
+
+        cout << "adding new points\n";
+        for (size_t i = 0; i < sorted_keypoint_idx.size() && i < N_BEST_POINTS; i++)
         {
-            if (!matched_idx[i])
-            {
-                this->descriptors.push_back(descriptors.row(i));
-                this->keypoints.push_back(keypoints[i]);
-                this->keypoints_names.push_back(to_string(this->keypoints.size()));
-            }
-        }
+            auto idx = sorted_keypoint_idx[i];
+            this->descriptors.push_back(descriptors.row(idx));
+            this->keypoints.push_back(keypoints[idx]);
+            this->keypoints_names.push_back(to_string(this->keypoints.size()));
+       }
     }
 
     string
@@ -107,7 +134,7 @@ match_keypoints(vector<KeyPoint> & keypoints,
     matcher.match(known_points.get_descriptors(),
                   descriptors,
                   matches);
-    cout << "matched " << matches.size() << "/" << keypoints.size() << endl;
+//    cout << "matched " << matches.size() << "/" << keypoints.size() << endl;
 
     vector<bool> matched_idx;
 
@@ -153,9 +180,9 @@ show_matches(Mat & frame,
     }
 
     Mat small;
-    resize(img_kpts, small, Size(), 0.6, 0.6, INTER_LANCZOS4);
+//    resize(img_kpts, small, Size(), 0.6, 0.6, INTER_LANCZOS4);
 
-    imshow("Frame", small);
+    imshow("Frame", img_kpts);
     next_step_delay();
 }
 
