@@ -5,12 +5,13 @@
 using namespace std;
 using namespace cv;
 
-#define FEATURES 16
+#define FEATURES 128*4
 
 class KnownPoints
 {
     Mat descriptors;
     vector<KeyPoint> keypoints;
+    vector<string> keypoints_names;
   public:
     KnownPoints()
     {
@@ -23,10 +24,13 @@ class KnownPoints
 
     void add_points(vector<KeyPoint> & keypoints,
                     Mat & descriptors,
-                    vector<bool> & matched_idx,
-                    vector<KeyPoint> & matched_keypoints)
+                    vector<bool> & matched_idx)
     {
-        matched_keypoints.clear();
+        if (this->keypoints.size() > 1024)
+        {
+            cout << "no more data" << endl;
+            return;
+        }
 
         for (auto i = 0; i < matched_idx.size(); i += 1)
         {
@@ -34,15 +38,22 @@ class KnownPoints
             {
                 this->descriptors.push_back(descriptors.row(i));
                 this->keypoints.push_back(keypoints[i]);
-                matched_keypoints.push_back(keypoints[i]);
+                this->keypoints_names.push_back(to_string(this->keypoints.size()));
             }
         }
+    }
+
+    string
+    get_point_name(size_t idx)
+    {
+        return this->keypoints_names[idx];
     }
 };
 
 bool
 get_frame(VideoCapture &video, Mat &frame)
 {
+    cout << " --------------------------------------------- " << endl;
     Mat tmp;
 
     video >> tmp;
@@ -65,17 +76,20 @@ get_keypoints(Mat & frame,
 }
 
 void
-filter_matches(int num_keypoints, vector<DMatch> &matches, vector<bool> &matched_idx)
+filter_matches(int num_keypoints, vector<DMatch> &matches,
+               vector<DMatch> &filtered_matches,
+               vector<bool> &matched_idx)
 {
     matched_idx = vector<bool>(num_keypoints);
 
     for (auto i = matches.begin(); i != matches.end(); ++ i)
     {
         auto ma = *i;
+        matched_idx[ma.trainIdx] = true;
 
-        if (ma.distance <= 10)
+        if (ma.distance <= 16)
         {
-            matched_idx[ma.trainIdx] = true;
+            filtered_matches.push_back(ma);
         }
     }
 }
@@ -83,35 +97,66 @@ filter_matches(int num_keypoints, vector<DMatch> &matches, vector<bool> &matched
 void
 match_keypoints(vector<KeyPoint> & keypoints,
                 Mat & descriptors,
-                vector<KeyPoint> & matched_keypoints)
+                vector<KeyPoint> & matched_keypoints,
+                vector<string> & matched_keypoints_names)
 {
     static auto matcher = BFMatcher(NORM_HAMMING, true);
     static auto known_points = KnownPoints();
 
     auto matches = vector<DMatch>();
-
     matcher.match(known_points.get_descriptors(),
                   descriptors,
                   matches);
+    cout << "matched " << matches.size() << "/" << keypoints.size() << endl;
 
     vector<bool> matched_idx;
-    filter_matches(keypoints.size(), matches, matched_idx);
-    known_points.add_points(keypoints, descriptors, matched_idx, matched_keypoints);
 
-//    cout << "matched " << matches.size() << "/" << keypoints.size() << endl;
+    auto filtered_matches = vector<DMatch>();
+    filter_matches(keypoints.size(), matches, filtered_matches, matched_idx);
+    known_points.add_points(keypoints, descriptors, matched_idx);
+
+    matched_keypoints.clear();
+    matched_keypoints_names.clear();
+    for (auto i = filtered_matches.begin(); i != filtered_matches.end(); ++ i)
+    {
+        auto ma = *i;
+        matched_keypoints.push_back(keypoints[ma.trainIdx]);
+        matched_keypoints_names.push_back(known_points.get_point_name(ma.queryIdx));
+    }
 }
 
 void
-show_matches(Mat & frame, vector<KeyPoint> matched_keypoints)
+next_step_delay()
+{
+    static int delay = -1;
+    switch (waitKey(delay))
+    {
+        case 32:
+            delay *= -1;
+            break;
+    }
+}
+
+void
+show_matches(Mat & frame,
+             vector<KeyPoint> matched_keypoints,
+             vector<string> & matched_keypoints_names)
 {
     cv::Mat img_kpts;
     cv::drawKeypoints(frame, matched_keypoints, img_kpts, cv::Scalar::all(-1), cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+
+    for (size_t i = 0; i < matched_keypoints_names.size(); i += 1)
+    {
+        putText(img_kpts, matched_keypoints_names[i],
+                matched_keypoints[i].pt, FONT_HERSHEY_DUPLEX, 1,
+                Scalar::all(-1));
+    }
 
     Mat small;
     resize(img_kpts, small, Size(), 0.6, 0.6, INTER_LANCZOS4);
 
     imshow("Frame", small);
-    waitKey(25);
+    next_step_delay();
 }
 
 void
@@ -120,14 +165,15 @@ process(VideoCapture &video)
     Mat frame;
     vector<KeyPoint> keypoints;
     vector<KeyPoint> matched_keypoints;
+    vector<string> matched_keypoints_names;
     Mat descriptors;
 
     while (get_frame(video, frame))
     {
         get_keypoints(frame, keypoints, descriptors);
-        match_keypoints(keypoints, descriptors, matched_keypoints);
+        match_keypoints(keypoints, descriptors, matched_keypoints, matched_keypoints_names);
 
-        show_matches(frame, matched_keypoints);
+        show_matches(frame, matched_keypoints, matched_keypoints_names);
     }
     cout << "done\n";
 }
