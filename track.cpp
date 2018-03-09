@@ -55,7 +55,8 @@ class KnownPoints
         return this->descriptors;
     }
 
-    void add_points(vector<KeyPoint> & keypoints,
+    void add_points(float vertical_offset,
+                    vector<KeyPoint> & keypoints,
                     Mat & descriptors,
                     vector<bool> & matched_idx)
     {
@@ -73,20 +74,20 @@ class KnownPoints
         {
             auto idx = sorted_keypoint_idx[i];
             this->descriptors.push_back(descriptors.row(idx));
+            keypoints[idx].pt.x += vertical_offset;
             this->keypoints.push_back(keypoints[idx]);
-            this->keypoints_names.push_back(to_string(this->keypoints.size()));
+            this->keypoints_names.push_back(
+                to_string(this->keypoints.size()) + " X " + to_string(keypoints[idx].pt.x));
        }
     }
 
     void
     get_matched_point_pairs(vector<DMatch> & matches,
                             vector<KeyPoint> & keypoints,
-                            vector<MatchPair> & pairs)
+                            vector<MatchPair> & pairs,
+                            float & vertical_offset)
     {
-        auto mp = MatchPair();
-        mp.known_point = this->keypoints[0];
-        mp.frame_point = keypoints[0];
-
+        double total_x_diff = 0;
         for (auto i = matches.begin(); i != matches.end(); i++)
         {
             auto ma = *i;
@@ -97,6 +98,12 @@ class KnownPoints
             mp.frame_point = keypoints[ma.trainIdx];
 
             pairs.push_back(mp);
+            total_x_diff += (mp.known_point.pt.x - mp.frame_point.pt.x);
+        }
+
+        if (matches.size() > 0)
+        {
+            vertical_offset = total_x_diff / matches.size();
         }
     }
 
@@ -111,15 +118,13 @@ bool
 get_frame(VideoCapture &video, Mat &frame)
 {
     cout << " --------------------------------------------- " << endl;
-    Mat tmp;
 
-    video >> tmp;
-    if (tmp.empty())
+    video >> frame;
+    if (frame.empty())
     {
         return false;
     }
 
-    cv::cvtColor(tmp, frame, COLOR_BGR2GRAY);
     return true;
 }
 
@@ -164,20 +169,21 @@ match_keypoints(vector<KeyPoint> & keypoints,
     matcher.match(known_points.get_descriptors(),
                   descriptors,
                   matches);
-//    cout << "matched " << matches.size() << "/" << keypoints.size() << endl;
-
     vector<bool> matched_idx;
 
     auto filtered_matches = vector<DMatch>();
     filter_matches(keypoints.size(), matches, filtered_matches, matched_idx);
 
-    cout << "filtered_matches " << filtered_matches.size() << endl;
     if (filtered_matches.size() > 0 || bootstrap)
     {
-        known_points.add_points(keypoints, descriptors, matched_idx);
+        float vertical_offset = 0;
         known_points.get_matched_point_pairs(filtered_matches,
                                              keypoints,
-                                             pairs);
+                                             pairs,
+                                             vertical_offset);
+
+        cout << "vertical_offset " << vertical_offset << endl;
+        known_points.add_points(vertical_offset, keypoints, descriptors, matched_idx);
         bootstrap = false;
     }
     else
@@ -199,31 +205,52 @@ next_step_delay()
 }
 
 void
+save_image(Mat & frame)
+{
+    static int n = 0;
+
+    vector<int> compression_params;
+    compression_params.push_back(CV_IMWRITE_PNG_COMPRESSION);
+    compression_params.push_back(9);
+
+    imwrite("frames/img" + to_string(++n) + ".png",
+            frame,
+            compression_params);
+}
+
+void
 show_matches(Mat & frame,
              vector<MatchPair> & pairs)
 {
     cv::Mat img_kpts;
-//    cv::drawKeypoints(frame, matched_keypoints, img_kpts, cv::Scalar::all(-1), cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 
     Point textPos = Point(10, 24);
-    cout << "got " << pairs.size() << " pairs\n";
+
+    vector<Scalar> colors;
+    colors.push_back(Scalar(0, 0, 255));
+    colors.push_back(Scalar(0, 255, 0));
+    colors.push_back(Scalar(255, 0, 0));
+    size_t currColor = 0;
+
     for (auto i = pairs.begin(); i != pairs.end(); i++)
     {
         auto pair = *i;
-//        cout << "pair " << pair.name << endl;
         putText(frame, pair.name,
                 textPos, FONT_HERSHEY_DUPLEX, 1,
-                Scalar::all(-1));
+                colors[currColor]);
 
-        line(frame, textPos, pair.frame_point.pt, Scalar::all(-1));
+        line(frame, textPos, pair.frame_point.pt, colors[currColor]);
 
         textPos.y += 24;
+
+        currColor = (currColor + 1) % colors.size();
     }
 
-    Mat small;
+//    Mat small;
 //    resize(img_kpts, small, Size(), 0.6, 0.6, INTER_LANCZOS4);
 
     imshow("Frame", frame);
+//    save_image(frame);
     next_step_delay();
 }
 
